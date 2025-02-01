@@ -1,7 +1,5 @@
 import requests
 import os
-from datetime import datetime, timedelta
-import time
 
 class StravaCommitUpdater:
     def __init__(self, client_id, client_secret, refresh_token):
@@ -33,28 +31,38 @@ class StravaCommitUpdater:
             print(f"Error refreshing token: {e}")
             return False
 
-    def get_recent_activities(self):
-        """Get activities from the last 24 hours."""
+    def get_last_runs(self, count=30):
+        """Get the last 'count' running activities."""
         if not self.access_token:
             if not self.refresh_access_token():
                 return None
 
         headers = {'Authorization': f'Bearer {self.access_token}'}
-        after_timestamp = int((datetime.now() - timedelta(days=1)).timestamp())
         
-        print(f"Fetching activities after timestamp: {after_timestamp}")
+        print(f"Fetching last {count} running activities...")
         
         try:
+            # We'll fetch a bit more than needed to ensure we get enough runs
+            # as some activities might not be runs
             response = requests.get(
                 'https://www.strava.com/api/v3/athlete/activities',
                 headers=headers,
-                params={'after': after_timestamp}
+                params={
+                    'per_page': 100  # Maximum allowed by Strava API
+                }
             )
             print(f"Activities response status: {response.status_code}")
             response.raise_for_status()
-            activities = response.json()
-            print(f"Found {len(activities)} activities")
-            return activities
+            
+            all_activities = response.json()
+            
+            # Filter for runs only
+            runs = [activity for activity in all_activities 
+                   if activity['type'] == 'Run'][:count]
+            
+            print(f"Found {len(runs)} running activities")
+            return runs
+            
         except requests.exceptions.RequestException as e:
             print(f"Error fetching activities: {e}")
             return None
@@ -91,26 +99,37 @@ class StravaCommitUpdater:
             print(f"Error updating activity {activity_id}: {e}")
             return False
 
-    def update_recent_activities(self):
-        """Update titles of all activities from the last 24 hours."""
-        activities = self.get_recent_activities()
-        if not activities:
-            print("No activities found or error occurred")
+    def update_last_runs(self, count=30):
+        """Update titles of last 'count' running activities."""
+        runs = self.get_last_runs(count)
+        if not runs:
+            print("No running activities found or error occurred")
             return
 
-        commit_message = self.get_random_commit_message()
-        if not commit_message:
-            print("Failed to get commit message")
-            return
+        print(f"\nUpdating {len(runs)} running activities...")
+        success_count = 0
 
-        for activity in activities:
-            print(f"Updating activity {activity['id']} ({activity['name']})")
+        for i, activity in enumerate(runs, 1):
+            commit_message = self.get_random_commit_message()
+            if not commit_message:
+                print("Failed to get commit message, skipping activity")
+                continue
+
+            print(f"\nUpdating run {i}/{len(runs)}")
+            print(f"Old name: {activity['name']}")
+            print(f"New name: {commit_message}")
+            
             if self.update_activity_title(activity['id'], commit_message):
-                print(f"Successfully updated to: {commit_message}")
+                success_count += 1
+                print("✓ Successfully updated")
             else:
-                print(f"Failed to update activity {activity['id']}")
+                print("✗ Failed to update")
+
+        print(f"\nFinished updating runs!")
+        print(f"Successfully updated {success_count} out of {len(runs)} activities")
 
 def main():
+    # Get credentials from environment variables
     client_id = os.getenv('STRAVA_CLIENT_ID')
     client_secret = os.getenv('STRAVA_CLIENT_SECRET')
     refresh_token = os.getenv('STRAVA_REFRESH_TOKEN')
@@ -121,7 +140,7 @@ def main():
         return
 
     updater = StravaCommitUpdater(client_id, client_secret, refresh_token)
-    updater.update_recent_activities()
+    updater.update_last_runs(30)
 
 if __name__ == "__main__":
     main()
